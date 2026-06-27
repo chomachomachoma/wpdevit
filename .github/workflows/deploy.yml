@@ -1,0 +1,84 @@
+name: Deploy theme to production
+
+# Builds the Svelte SPA and deploys the compiled theme to the DigitalOcean
+# droplet over SSH. Runs automatically on pushes to main that touch theme
+# source, and can be triggered manually from the Actions tab.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'inc/**'
+      - 'functions.php'
+      - 'index.php'
+      - 'style.css'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.js'
+      - 'svelte.config.js'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+# Never let two deploys overlap; let an in-flight deploy finish.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  DO_HOST: 142.93.246.163
+  DO_USER: root
+  THEME_PATH: /var/www/wpdevit.com/wp-content/themes/wpdevit
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build theme
+        run: npm run build
+
+      - name: Stage runtime files
+        # Only the files WordPress actually serves at runtime. Dev sources
+        # (src/, node_modules/, build config) are intentionally excluded.
+        run: |
+          rm -rf deploy
+          mkdir -p deploy
+          cp -r functions.php index.php style.css inc dist deploy/
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DO_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DO_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy via rsync
+        # --delete keeps the remote theme dir an exact mirror of deploy/.
+        run: |
+          rsync -az --delete \
+            -e "ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes" \
+            deploy/ "$DO_USER@$DO_HOST:$THEME_PATH/"
+
+      - name: Fix ownership
+        run: |
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes "$DO_USER@$DO_HOST" \
+            "chown -R www-data:www-data '$THEME_PATH'"
+
+      - name: Smoke test
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" https://wpdevit.com/)
+          echo "Homepage returned HTTP $code"
+          test "$code" = "200"
+          curl -sf https://wpdevit.com/wp-json/wpdevit/v1/site-info > /dev/null
+          echo "REST site-info reachable. Deploy OK."
