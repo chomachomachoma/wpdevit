@@ -66,6 +66,18 @@ jobs:
           chmod 600 "$HOME/.ssh/deploy_key"
           ssh-keyscan -H "$DO_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null
 
+      - name: DEBUG ssh
+        run: |
+          echo "runner key fingerprint (expect SHA256:/99HsjK/CwcA6x96qvpQ8Bj8wkvVo92AB/0b6ioFmsE):"
+          ssh-keygen -lf "$HOME/.ssh/deploy_key" || echo "KEY UNREADABLE"
+          echo "--- key first/last line ---"
+          head -1 "$HOME/.ssh/deploy_key"; tail -1 "$HOME/.ssh/deploy_key"
+          echo "--- byte count ---"; wc -c "$HOME/.ssh/deploy_key"
+          echo "--- verbose ssh attempt ---"
+          timeout 30 ssh -v -i "$HOME/.ssh/deploy_key" -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o BatchMode=yes \
+            "$DO_USER@$DO_HOST" "echo REMOTE_OK" 2>&1 | tail -30 || echo "ssh exit $?"
+
       - name: Deploy via rsync
         # --delete keeps the remote theme dir an exact mirror of deploy/.
         run: |
