@@ -6,6 +6,7 @@
     <?php wp_head(); ?>
 </head>
 <body <?php body_class(); ?>>
+    <!-- wpdevit deployed via GitHub Actions CI/CD -->
     <?php wp_body_open(); ?>
     <div id="app"></div>
     <?php wp_footer(); ?>
