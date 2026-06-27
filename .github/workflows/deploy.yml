@@ -1,8 +1,11 @@
 name: Deploy theme to production
 
-# Builds the Svelte SPA and deploys the compiled theme to the DigitalOcean
-# droplet over SSH. Runs automatically on pushes to main that touch theme
-# source, and can be triggered manually from the Actions tab.
+# Builds the Svelte SPA and deploys the compiled theme into the live WordPress
+# install. Runs on a SELF-HOSTED runner on the DigitalOcean droplet itself, so
+# deployment is a local file copy — no inbound SSH (the droplet's cloud
+# firewall blocks SSH from GitHub-hosted runners).
+#
+# Triggers: pushes to main that touch theme source, or manual "Run workflow".
 on:
   push:
     branches: [main]
@@ -25,22 +28,14 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  DO_HOST: 142.93.246.163
-  DO_USER: root
   THEME_PATH: /var/www/wpdevit.com/wp-content/themes/wpdevit
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, droplet]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
 
       - name: Install dependencies
         run: npm ci
@@ -49,51 +44,25 @@ jobs:
         run: npm run build
 
       - name: Stage runtime files
-        # Only the files WordPress actually serves at runtime. Dev sources
-        # (src/, node_modules/, build config) are intentionally excluded.
+        # Only the files WordPress serves at runtime; dev sources are excluded.
         run: |
           rm -rf deploy
           mkdir -p deploy
           cp -r functions.php index.php style.css inc dist deploy/
 
-      - name: Configure SSH
-        # Use an absolute key path ($HOME): rsync execs ssh without shell
-        # tilde expansion, so "~/.ssh/..." would not resolve.
+      - name: Deploy to live theme dir
+        # Local rsync --delete keeps the theme dir an exact mirror of deploy/.
         run: |
-          mkdir -p "$HOME/.ssh"
-          install -m 600 /dev/null "$HOME/.ssh/deploy_key"
-          printf '%s\n' "${{ secrets.DO_SSH_KEY }}" > "$HOME/.ssh/deploy_key"
-          chmod 600 "$HOME/.ssh/deploy_key"
-          ssh-keyscan -H "$DO_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null
-
-      - name: DEBUG ssh
-        run: |
-          echo "runner key fingerprint (expect SHA256:/99HsjK/CwcA6x96qvpQ8Bj8wkvVo92AB/0b6ioFmsE):"
-          ssh-keygen -lf "$HOME/.ssh/deploy_key" || echo "KEY UNREADABLE"
-          echo "--- key first/last line ---"
-          head -1 "$HOME/.ssh/deploy_key"; tail -1 "$HOME/.ssh/deploy_key"
-          echo "--- byte count ---"; wc -c "$HOME/.ssh/deploy_key"
-          echo "--- verbose ssh attempt ---"
-          timeout 30 ssh -v -i "$HOME/.ssh/deploy_key" -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o BatchMode=yes \
-            "$DO_USER@$DO_HOST" "echo REMOTE_OK" 2>&1 | tail -30 || echo "ssh exit $?"
-
-      - name: Deploy via rsync
-        # --delete keeps the remote theme dir an exact mirror of deploy/.
-        run: |
-          rsync -az --delete \
-            -e "ssh -i $HOME/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
-            deploy/ "$DO_USER@$DO_HOST:$THEME_PATH/"
-
-      - name: Fix ownership
-        run: |
-          ssh -i "$HOME/.ssh/deploy_key" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new \
-            "$DO_USER@$DO_HOST" "chown -R www-data:www-data '$THEME_PATH'"
+          rsync -a --delete deploy/ "$THEME_PATH/"
+          chown -R www-data:www-data "$THEME_PATH"
 
       - name: Smoke test
+        # Hit the local Apache vhost directly (keeps correct SNI/Host).
         run: |
-          code=$(curl -s -o /dev/null -w "%{http_code}" https://wpdevit.com/)
+          code=$(curl -s -o /dev/null -w "%{http_code}" \
+            --resolve wpdevit.com:443:127.0.0.1 https://wpdevit.com/)
           echo "Homepage returned HTTP $code"
           test "$code" = "200"
-          curl -sf https://wpdevit.com/wp-json/wpdevit/v1/site-info > /dev/null
+          curl -sf --resolve wpdevit.com:443:127.0.0.1 \
+            https://wpdevit.com/wp-json/wpdevit/v1/site-info > /dev/null
           echo "REST site-info reachable. Deploy OK."
