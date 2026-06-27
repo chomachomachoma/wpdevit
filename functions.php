@@ -72,6 +72,48 @@ function wpdevit_script_type_module($tag, $handle) {
 add_filter('script_loader_tag', 'wpdevit_script_type_module', 10, 2);
 
 /**
+ * Send a restrictive Permissions-Policy header.
+ *
+ * The site itself never uses device/app capabilities (camera, mic, USB, serial,
+ * geolocation, etc.), so we disable them outright — this stops browsers from
+ * ever prompting visitors with things like "Access other apps and services on
+ * this device." `payment` is deliberately NOT listed, leaving it at the browser
+ * default so the Freemius checkout overlay keeps working unchanged.
+ */
+function wpdevit_permissions_policy() {
+    if (is_admin()) {
+        return;
+    }
+    $policy = implode(', ', [
+        'accelerometer=()',
+        'ambient-light-sensor=()',
+        'autoplay=()',
+        'battery=()',
+        'bluetooth=()',
+        'browsing-topics=()',
+        'camera=()',
+        'display-capture=()',
+        'gamepad=()',
+        'geolocation=()',
+        'gyroscope=()',
+        'hid=()',
+        'idle-detection=()',
+        'local-fonts=()',
+        'magnetometer=()',
+        'microphone=()',
+        'midi=()',
+        'publickey-credentials-get=()',
+        'screen-wake-lock=()',
+        'serial=()',
+        'usb=()',
+        'window-management=()',
+        'xr-spatial-tracking=()',
+    ]);
+    header('Permissions-Policy: ' . $policy);
+}
+add_action('send_headers', 'wpdevit_permissions_policy');
+
+/**
  * SPA catch-all: always serve index.php for frontend requests.
  */
 function wpdevit_spa_template($template) {
